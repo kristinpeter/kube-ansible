@@ -386,6 +386,13 @@ After successful deployment, you'll have:
 
 ---
 
+## Contributors
+
+- **Primary Developer**: [@kristinpeter](https://github.com/kristinpeter)
+- **AI Assistant**: Claude Code (Anthropic) - Project architecture, automation design, and documentation
+
+---
+
 *For detailed step-by-step instructions, see [MANUAL_PROCEDURES.md](MANUAL_PROCEDURES.md)*  
 *For command reference, see [COMMAND_REFERENCE.md](COMMAND_REFERENCE.md)*  
 *For quick deployment, see [QUICK_START.md](QUICK_START.md)*
