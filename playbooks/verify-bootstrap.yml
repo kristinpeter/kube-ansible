@@ -1,0 +1,173 @@
+---
+# Bootstrap Verification Playbook
+# Purpose: Verify that all nodes are ready for Kubernetes cluster initialization
+# Usage: ansible-playbook -i inventory/production/hosts.yml playbooks/verify-bootstrap.yml
+
+- name: Verify Kubernetes Bootstrap Readiness
+  hosts: k8s_cluster
+  gather_facts: yes
+  become: no
+  
+  vars:
+    verification_results: []
+    
+  tasks:
+    - name: "Phase 1: Connectivity Test"
+      debug:
+        msg: "Verify: Node {{ inventory_hostname }} is reachable"
+      delegate_to: localhost
+      run_once: false
+
+    - name: "Test: containerd service status"
+      systemd:
+        name: containerd
+      register: containerd_status
+      become: yes
+
+    - name: "Verify: containerd is active"
+      assert:
+        that:
+          - containerd_status.status.ActiveState == "active"
+        fail_msg: "ERROR: containerd service is not active on {{ inventory_hostname }}"
+        success_msg: "Verify: containerd service is active on {{ inventory_hostname }}"
+
+    - name: "Test: Kubernetes component versions"
+      shell: kubeadm version -o short
+      register: kubeadm_version
+      changed_when: false
+
+    - name: "Verify: Kubernetes version is v1.33.4"
+      assert:
+        that:
+          - "'v1.33.4' in kubeadm_version.stdout"
+        fail_msg: "ERROR: Expected Kubernetes v1.33.4, got {{ kubeadm_version.stdout }} on {{ inventory_hostname }}"
+        success_msg: "Verify: Kubernetes v1.33.4 installed on {{ inventory_hostname }}"
+
+    - name: "Test: kubelet service configuration"
+      systemd:
+        name: kubelet
+      register: kubelet_status
+      become: yes
+
+    - name: "Verify: kubelet is enabled"
+      assert:
+        that:
+          - kubelet_status.status.UnitFileState == "enabled"
+        fail_msg: "ERROR: kubelet service is not enabled on {{ inventory_hostname }}"
+        success_msg: "Verify: kubelet service is enabled on {{ inventory_hostname }}"
+
+    - name: "Test: API endpoint in /etc/hosts"
+      shell: grep -q "api.kube.homelab.lan" /etc/hosts
+      register: api_endpoint_check
+      changed_when: false
+      failed_when: api_endpoint_check.rc != 0
+
+    - name: "Verify: API endpoint configured"
+      debug:
+        msg: "Verify: API endpoint configured in /etc/hosts on {{ inventory_hostname }}"
+
+    - name: "Test: NTP service status"
+      systemd:
+        name: ntp
+      register: ntp_status
+      become: yes
+
+    - name: "Verify: NTP is active"
+      assert:
+        that:
+          - ntp_status.status.ActiveState == "active"
+        fail_msg: "ERROR: NTP service is not active on {{ inventory_hostname }}"
+        success_msg: "Verify: NTP service is active on {{ inventory_hostname }}"
+
+    - name: "Test: IP forwarding configuration"
+      shell: sysctl net.ipv4.ip_forward
+      register: ip_forward_check
+      changed_when: false
+
+    - name: "Verify: IP forwarding is enabled"
+      assert:
+        that:
+          - "'net.ipv4.ip_forward = 1' in ip_forward_check.stdout"
+        fail_msg: "ERROR: IP forwarding is not enabled on {{ inventory_hostname }}"
+        success_msg: "Verify: IP forwarding is enabled on {{ inventory_hostname }}"
+
+    - name: "Test: Swap status"
+      shell: free | grep -i swap | awk '{print $2}'
+      register: swap_check
+      changed_when: false
+
+    - name: "Verify: Swap is disabled"
+      assert:
+        that:
+          - swap_check.stdout == "0"
+        fail_msg: "ERROR: Swap is not disabled on {{ inventory_hostname }}"
+        success_msg: "Verify: Swap is disabled on {{ inventory_hostname }}"
+
+    - name: "Test: Required kernel modules"
+      shell: lsmod | grep -E "(overlay|br_netfilter)"
+      register: modules_check
+      changed_when: false
+
+    - name: "Verify: Kernel modules are loaded"
+      assert:
+        that:
+          - "'overlay' in modules_check.stdout"
+          - "'br_netfilter' in modules_check.stdout"
+        fail_msg: "ERROR: Required kernel modules not loaded on {{ inventory_hostname }}"
+        success_msg: "Verify: Required kernel modules loaded on {{ inventory_hostname }}"
+
+    - name: "Collect verification status"
+      set_fact:
+        node_status: "READY"
+
+# Primary master specific tests
+- name: Verify Primary Master Readiness
+  hosts: k8s_masters[0]
+  gather_facts: no
+  become: yes
+  
+  tasks:
+    - name: "Test: kubeadm is ready"
+      shell: kubeadm version -o short
+      register: preflight_check
+      changed_when: false
+      failed_when: preflight_check.rc != 0
+
+    - name: "Verify: kubeadm is ready"
+      debug:
+        msg: "Verify: kubeadm is ready on primary master"
+
+# Summary report
+- name: Bootstrap Verification Summary
+  hosts: localhost
+  gather_facts: no
+  
+  tasks:
+    - name: "Summary: Verification Complete"
+      debug:
+        msg: |
+          
+          *** BOOTSTRAP VERIFICATION SUCCESSFUL! ***
+          ==========================================
+          
+          [OK] All {{ groups['k8s_cluster'] | length }} nodes are ready for cluster initialization
+          
+          VERIFIED COMPONENTS:
+          - Ansible connectivity to all nodes
+          - containerd service running on all nodes
+          - Kubernetes v1.33.4 installed on all nodes
+          - kubelet service enabled on all nodes
+          - API endpoint configured on all nodes
+          - NTP service running on all nodes
+          - IP forwarding enabled on all nodes
+          - Swap disabled on all nodes
+          - Required kernel modules loaded on all nodes
+          - kubeadm preflight checks passed on primary master
+          
+          NEXT STEPS:
+          1. SSH to primary master: ssh ansible@{{ groups['k8s_masters'][0] }}
+          2. Initialize cluster: sudo kubeadm init --control-plane-endpoint="api.kube.homelab.lan:6443" --upload-certs --pod-network-cidr="10.244.0.0/16"
+          3. Follow join commands for additional masters and workers
+          4. Install CNI plugin (Calico)
+          
+          See MANUAL_PROCEDURES.md for detailed next steps

@@ -1,0 +1,161 @@
+---
+# containerd installation and configuration tasks
+
+- name: Create Docker GPG keyring directory
+  file:
+    path: /usr/share/keyrings
+    state: directory
+    mode: '0755'
+  tags:
+    - containerd
+    - repository
+
+- name: Download Docker GPG key
+  get_url:
+    url: "{{ docker_apt_key_url }}"
+    dest: /tmp/docker-key.gpg
+    mode: '0644'
+    timeout: 30
+  tags:
+    - containerd
+    - repository
+
+- name: Add Docker GPG key (properly dearmored)
+  shell: |
+    gpg --dearmor -o {{ docker_gpg_key_path }} /tmp/docker-key.gpg
+  args:
+    creates: "{{ docker_gpg_key_path }}"
+  tags:
+    - containerd
+    - repository
+
+- name: Clean up temporary GPG key file
+  file:
+    path: /tmp/docker-key.gpg
+    state: absent
+  tags:
+    - containerd
+    - repository
+
+- name: Set proper permissions on Docker GPG key
+  file:
+    path: "{{ docker_gpg_key_path }}"
+    mode: '0644'
+  tags:
+    - containerd
+    - repository
+
+- name: Add Docker repository for containerd.io
+  apt_repository:
+    repo: "{{ docker_apt_repository }}"
+    filename: docker
+    state: present
+    update_cache: yes
+  tags:
+    - containerd
+    - repository
+
+- name: Update apt cache after adding Docker repository
+  apt:
+    update_cache: yes
+    cache_valid_time: 600
+  tags:
+    - containerd
+    - repository
+
+- name: Install containerd.io package
+  apt:
+    name: containerd.io
+    state: present
+    update_cache: yes
+  register: containerd_install_result
+  retries: 3
+  delay: 30
+  until: containerd_install_result is succeeded
+  tags:
+    - containerd
+    - packages
+
+- name: Create containerd configuration directory
+  file:
+    path: "{{ containerd_config_dir }}"
+    state: directory
+    mode: '0755'
+  tags:
+    - containerd
+    - configuration
+
+- name: Generate default containerd configuration
+  shell: containerd config default
+  register: containerd_default_config
+  changed_when: false
+  tags:
+    - containerd
+    - configuration
+
+- name: Write containerd configuration file
+  copy:
+    content: "{{ containerd_default_config.stdout }}"
+    dest: "{{ containerd_config_file }}"
+    mode: '0644'
+    backup: yes
+  notify: restart containerd
+  tags:
+    - containerd
+    - configuration
+
+- name: Configure systemd cgroup driver in containerd
+  lineinfile:
+    path: "{{ containerd_config_file }}"
+    regexp: '^\s*SystemdCgroup\s*='
+    line: '            SystemdCgroup = true'
+    backup: yes
+  notify: restart containerd
+  tags:
+    - containerd
+    - configuration
+
+- name: Configure pause image in containerd
+  lineinfile:
+    path: "{{ containerd_config_file }}"
+    regexp: '^\s*sandbox_image\s*='
+    line: '    sandbox_image = "{{ pause_image }}"'
+    backup: yes
+  notify: restart containerd
+  tags:
+    - containerd
+    - configuration
+
+- name: Start and enable containerd service
+  systemd:
+    name: "{{ containerd_service_name }}"
+    state: started
+    enabled: yes
+    daemon_reload: yes
+  tags:
+    - containerd
+    - service
+
+- name: Verify containerd is running
+  systemd:
+    name: "{{ containerd_service_name }}"
+  register: containerd_service_status
+  tags:
+    - containerd
+    - verification
+
+- name: Test containerd installation
+  command: ctr version
+  register: containerd_version_output
+  changed_when: false
+  tags:
+    - containerd
+    - verification
+
+- name: Display containerd version
+  debug:
+    var: containerd_version_output.stdout_lines
+  tags:
+    - containerd
+    - verification
+

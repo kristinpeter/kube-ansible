@@ -1,0 +1,145 @@
+---
+# Kubernetes components installation tasks
+
+- name: Add Kubernetes GPG key
+  get_url:
+    url: "{{ kubernetes_apt_key_url }}"
+    dest: /tmp/kubernetes-release.key
+    mode: '0644'
+  tags:
+    - kubernetes
+    - repository
+
+- name: Create Kubernetes keyring directory
+  file:
+    path: /etc/apt/keyrings
+    state: directory
+    mode: '0755'
+  tags:
+    - kubernetes
+    - repository
+
+- name: Convert and install Kubernetes GPG key
+  shell: |
+    gpg --dearmor -o {{ kubernetes_gpg_key_path }} /tmp/kubernetes-release.key
+  args:
+    creates: "{{ kubernetes_gpg_key_path }}"
+  tags:
+    - kubernetes
+    - repository
+
+- name: Clean up temporary Kubernetes key file
+  file:
+    path: /tmp/kubernetes-release.key
+    state: absent
+  tags:
+    - kubernetes
+    - repository
+
+- name: Set proper permissions on Kubernetes GPG key
+  file:
+    path: "{{ kubernetes_gpg_key_path }}"
+    mode: '0644'
+  tags:
+    - kubernetes
+    - repository
+
+- name: Add Kubernetes repository
+  apt_repository:
+    repo: "{{ kubernetes_apt_repository }}"
+    filename: kubernetes
+    state: present
+    update_cache: yes
+  tags:
+    - kubernetes
+    - repository
+
+- name: Update apt cache after adding Kubernetes repository
+  apt:
+    update_cache: yes
+    cache_valid_time: 600
+  tags:
+    - kubernetes
+    - repository
+
+- name: Install Kubernetes packages
+  apt:
+    name: "{{ kubernetes_packages }}"
+    state: present
+    update_cache: yes
+  register: k8s_install_result
+  retries: 3
+  delay: 30
+  until: k8s_install_result is succeeded
+  tags:
+    - kubernetes
+    - packages
+
+- name: Hold Kubernetes packages to prevent automatic updates
+  dpkg_selections:
+    name: "{{ item }}"
+    selection: hold
+  loop: "{{ kubernetes_packages }}"
+  when: kubernetes_package_hold | default(true)
+  tags:
+    - kubernetes
+    - packages
+
+- name: Enable kubelet service
+  systemd:
+    name: "{{ kubelet_service_name }}"
+    enabled: yes
+    daemon_reload: yes
+  when: kubelet_enable_service | default(true)
+  tags:
+    - kubernetes
+    - service
+
+- name: Verify kubeadm installation
+  command: kubeadm version -o short
+  register: kubeadm_version_output
+  changed_when: false
+  tags:
+    - kubernetes
+    - verification
+
+- name: Verify kubelet installation
+  command: kubelet --version
+  register: kubelet_version_output
+  changed_when: false
+  tags:
+    - kubernetes
+    - verification
+
+- name: Verify kubectl installation
+  command: kubectl version --client=true -o yaml
+  register: kubectl_version_output
+  changed_when: false
+  tags:
+    - kubernetes
+    - verification
+
+- name: Display Kubernetes component versions
+  debug:
+    msg:
+      - "kubeadm: {{ kubeadm_version_output.stdout }}"
+      - "kubelet: {{ kubelet_version_output.stdout }}"
+      - "kubectl client version installed successfully"
+  tags:
+    - kubernetes
+    - verification
+
+- name: Check kubelet service status
+  systemd:
+    name: "{{ kubelet_service_name }}"
+  register: kubelet_service_status
+  tags:
+    - kubernetes
+    - verification
+
+- name: Display kubelet service status
+  debug:
+    msg: "Kubelet service is {{ kubelet_service_status.status.ActiveState }} (this is expected before cluster initialization)"
+  tags:
+    - kubernetes
+    - verification

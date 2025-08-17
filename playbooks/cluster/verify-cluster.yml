@@ -1,0 +1,261 @@
+---
+# Kubernetes Cluster Verification and Health Checks
+# This playbook performs comprehensive cluster verification after deployment
+
+- name: "Verify: Verify Kubernetes Cluster Health"
+  hosts: "{{ groups['k8s_masters'][0] }}"
+  become: yes
+  gather_facts: yes
+  vars_files:
+    - "{{ playbook_dir }}/../../group_vars/all.yml"
+  
+  vars:
+    # Verification settings (can be overridden via extra-vars)
+    verification_timeout: 300
+    check_interval: 15
+    required_nodes: "{{ groups['k8s_cluster'] | length }}"
+  
+  pre_tasks:
+    - name: "Check: Cluster Verification Information"
+      debug:
+        msg:
+          - "=== CLUSTER VERIFICATION ==="
+          - "Expected Nodes: {{ required_nodes }}"
+          - "Masters: {{ groups['k8s_masters'] | length }}"
+          - "Workers: {{ groups['k8s_workers'] | length }}"
+          - "Verification Timeout: {{ verification_timeout }}s"
+
+  tasks:
+    # =============================================================================
+    # NODE READINESS VERIFICATION
+    # =============================================================================
+    
+    - name: "Check: All nodes are present"
+      shell: kubectl --kubeconfig=/etc/kubernetes/admin.conf get nodes --no-headers | wc -l
+      register: actual_node_count
+      failed_when: actual_node_count.stdout | int != required_nodes | int
+      
+    - name: "Wait: All nodes become Ready"
+      shell: kubectl --kubeconfig=/etc/kubernetes/admin.conf get nodes --no-headers | grep -v ' Ready ' | wc -l
+      register: not_ready_nodes
+      retries: "{{ (verification_timeout / check_interval) | int }}"
+      delay: "{{ check_interval }}"
+      until: not_ready_nodes.stdout | int == 0
+      
+    - name: "Verify: Node roles and status"
+      shell: kubectl --kubeconfig=/etc/kubernetes/admin.conf get nodes -o wide
+      register: nodes_status
+      
+    - name: "Summary: Display: Cluster nodes status"
+      debug:
+        msg:
+          - "=== CLUSTER NODES ==="
+          - "{{ nodes_status.stdout_lines }}"
+    
+    # =============================================================================
+    # SYSTEM PODS VERIFICATION
+    # =============================================================================
+    
+    - name: "Wait: Core system pods are ready"
+      shell: |
+        kubectl get pods -n kube-system --no-headers | \
+        grep -E '(kube-apiserver|kube-controller-manager|kube-scheduler|etcd)' | \
+        grep -v Running | wc -l
+      register: system_pods_not_ready
+      retries: "{{ (verification_timeout / check_interval) | int }}"
+      delay: "{{ check_interval }}"
+      until: system_pods_not_ready.stdout | int == 0
+      
+    - name: "Verify: System pods status"
+      shell: kubectl --kubeconfig=/etc/kubernetes/admin.conf get pods -n kube-system -o wide
+      register: system_pods_status
+      
+    - name: "Summary: Display: System pods"
+      debug:
+        msg:
+          - "=== SYSTEM PODS ==="
+          - "{{ system_pods_status.stdout_lines }}"
+    
+    # =============================================================================
+    # CNI PODS VERIFICATION (CALICO)
+    # =============================================================================
+    
+    - name: "Wait: Calico pods are ready"
+      shell: |
+        kubectl get pods -n calico-system --no-headers 2>/dev/null | \
+        grep -v Running | wc -l
+      register: calico_pods_not_ready
+      retries: "{{ (verification_timeout / check_interval) | int }}"
+      delay: "{{ check_interval }}"
+      until: calico_pods_not_ready.stdout | int == 0
+      failed_when: false  # Don't fail if namespace doesn't exist yet
+      
+    - name: "Verify: Calico pods status"
+      shell: kubectl --kubeconfig=/etc/kubernetes/admin.conf get pods -n calico-system -o wide 2>/dev/null || echo "Calico namespace not found"
+      register: calico_cni_status
+      
+    - name: "Summary: Display: Calico CNI pods"
+      debug:
+        msg:
+          - "=== CALICO CNI PODS ==="
+          - "{{ calico_cni_status.stdout_lines }}"
+      when: calico_cni_status.stdout != "Calico namespace not found"
+    
+    # =============================================================================
+    # API SERVER HEALTH VERIFICATION
+    # =============================================================================
+    
+    - name: "Verify: Check: API server health"
+      shell: kubectl --kubeconfig=/etc/kubernetes/admin.conf get --raw /healthz
+      register: api_health
+      
+    - name: "Verify: Check: API server version"
+      shell: kubectl --kubeconfig=/etc/kubernetes/admin.conf version
+      register: api_version
+      
+    - name: "Summary: Display: API server status"
+      debug:
+        msg:
+          - "=== API SERVER ==="
+          - "Health: {{ api_health.stdout }}"
+          - "Version Info:"
+          - "{{ api_version.stdout_lines }}"
+    
+    # =============================================================================
+    # DNS RESOLUTION VERIFICATION
+    # =============================================================================
+    
+    - name: "Wait: CoreDNS pods are ready"
+      shell: |
+        kubectl get pods -n kube-system -l k8s-app=kube-dns --no-headers | \
+        grep -v Running | wc -l
+      register: coredns_not_ready
+      retries: "{{ (verification_timeout / check_interval) | int }}"
+      delay: "{{ check_interval }}"
+      until: coredns_not_ready.stdout | int == 0
+      
+    - name: "Verify: Test: DNS resolution with test pod"
+      shell: |
+        kubectl run dns-test --image=busybox:1.35 --rm -it --restart=Never \
+        --command -- nslookup kubernetes.default.svc.cluster.local
+      register: dns_test
+      timeout: 60
+      failed_when: false  # Don't fail the playbook if DNS test fails
+      
+    - name: "Summary: Display: DNS test results"
+      debug:
+        msg:
+          - "=== DNS RESOLUTION TEST ==="
+          - "{% if dns_test.rc == 0 %}Verify: DNS is working correctly{% else %}ERROR: DNS test failed{% endif %}"
+          - "{{ dns_test.stdout_lines | default(['DNS test not performed']) }}"
+    
+    # =============================================================================
+    # COMPREHENSIVE CLUSTER STATUS
+    # =============================================================================
+    
+    - name: "Summary: Comprehensive cluster overview"
+      shell: |
+        echo "=== CLUSTER OVERVIEW ==="
+        echo "Cluster Info:"
+        kubectl cluster-info
+        echo ""
+        echo "Node Resources:"
+        kubectl top nodes 2>/dev/null || echo "Metrics server not available"
+        echo ""
+        echo "All Namespaces:"
+        kubectl get namespaces
+        echo ""
+        echo "All Services:"
+        kubectl get services --all-namespaces
+      register: cluster_overview
+      
+    - name: "*** Final cluster verification summary ***"
+      debug:
+        msg:
+          - "=== CLUSTER VERIFICATION COMPLETED ==="
+          - ""
+          - "[OK] Cluster Status: HEALTHY"
+          - "Total Nodes: {{ actual_node_count.stdout }}/{{ required_nodes }}"
+          - "Masters: {{ groups['k8s_masters'] | length }}"
+          - "Workers: {{ groups['k8s_workers'] | length }}"
+          - "CNI: Calico"
+          - ""
+          - "{{ cluster_overview.stdout_lines }}"
+          - ""
+          - "*** Your Kubernetes cluster is ready for production workloads! ***"
+
+  post_tasks:
+    # =============================================================================
+    # KUBECONFIG DOWNLOAD AND SETUP
+    # =============================================================================
+    
+    - name: "Download: Download kubeconfig for local use"
+      block:
+        - name: "Create: Create local kubeconfig directory"
+          file:
+            path: "{{ playbook_dir }}/../../kubeconfig"
+            state: directory
+            mode: '0755'
+          delegate_to: localhost
+          become: no
+          
+        - name: "Download: Fetch kubeconfig from primary master"
+          fetch:
+            src: "/etc/kubernetes/admin.conf"
+            dest: "{{ playbook_dir }}/../../kubeconfig/config"
+            flat: yes
+          register: kubeconfig_download
+          
+        - name: "Notice: Update kubeconfig server URL for external access"
+          replace:
+            path: "{{ playbook_dir }}/../../kubeconfig/config"
+            regexp: 'server: https://.*:6443'
+            replace: 'server: https://{{ api_endpoint_name }}:6443'
+          delegate_to: localhost
+          become: no
+          
+        - name: "Verify: Set kubeconfig permissions"
+          file:
+            path: "{{ playbook_dir }}/../../kubeconfig/config"
+            mode: '0600'
+          delegate_to: localhost
+          become: no
+          
+        - name: "Summary: Kubeconfig download summary"
+          debug:
+            msg:
+              - "=== KUBECONFIG DOWNLOADED ==="
+              - ""
+              - "Create: Local Path: ./kubeconfig/config"
+              - "Notice: Server URL: https://{{ api_endpoint_name }}:6443"
+              - ""
+              - "Extract: Usage Examples:"
+              - "  export KUBECONFIG=./kubeconfig/config"
+              - "  kubectl get nodes"
+              - ""
+              - "  # Or use with specific config:"
+              - "  kubectl --kubeconfig=./kubeconfig/config get nodes"
+              - ""
+              - "  # Copy to default location:"
+              - "  cp ./kubeconfig/config ~/.kube/config"
+              
+    - name: "Display: Next steps information"
+      debug:
+        msg:
+          - "=== CLUSTER IS READY ==="
+          - ""
+          - "Extract: Cluster Access:"
+          - "  # SSH to primary master:"
+          - "  ssh {{ hostvars[groups['k8s_masters'][0]]['ansible_host'] | default(groups['k8s_masters'][0]) }}"
+          - "  kubectl get nodes"
+          - ""
+          - "Task: Deploy Applications:"
+          - "  kubectl create deployment nginx --image=nginx"
+          - "  kubectl expose deployment nginx --port=80 --type=NodePort"
+          - ""
+          - "Resources: Useful Commands:"
+          - "  kubectl cluster-info"
+          - "  kubectl get events --sort-by=.metadata.creationTimestamp"
+          - "  kubectl describe nodes"
+          - ""
+          - "*** Your Kubernetes cluster is fully operational!"

@@ -1,0 +1,187 @@
+---
+# Main playbook for Kubernetes cluster bootstrap
+# This playbook prepares Ubuntu 24.04 nodes for Kubernetes cluster deployment
+# It does NOT initialize the cluster - only prepares the nodes
+
+- name: Bootstrap Kubernetes cluster nodes
+  hosts: k8s_cluster
+  become: yes
+  gather_facts: yes
+  serial: "{{ ansible_serial | default('100%') }}"
+  
+  pre_tasks:
+    - name: Verify operating system compatibility
+      fail:
+        msg: "This playbook is designed for Ubuntu 24.04. Detected: {{ ansible_distribution }} {{ ansible_distribution_version }}"
+      when: 
+        - ansible_distribution != "Ubuntu" or ansible_distribution_version != "24.04"
+      tags: always
+
+    - name: Check connectivity to all nodes
+      ping:
+      tags: always
+
+    - name: "🛡️ SAFETY: Detect existing Kubernetes installation"
+      shell: |
+        if command -v kubeadm >/dev/null 2>&1 && kubeadm version -o short >/dev/null 2>&1; then
+          echo "FOUND: $(kubeadm version -o short 2>/dev/null)"
+        else
+          echo "NOT_FOUND"
+        fi
+      register: existing_k8s_check
+      changed_when: false
+      failed_when: false
+      tags: always
+
+    - name: "🛡️ SAFETY: Detect existing container runtime"
+      shell: |
+        if systemctl is-active --quiet crio; then
+          echo "CRIO_RUNNING"
+        elif systemctl is-active --quiet docker; then
+          echo "DOCKER_RUNNING"
+        else
+          echo "NONE_RUNNING"
+        fi
+      register: existing_runtime_check
+      changed_when: false
+      failed_when: false
+      tags: always
+
+    - name: "🛡️ SAFETY: Check cluster membership"
+      stat:
+        path: /etc/kubernetes/kubelet.conf
+      register: kubelet_conf_check
+      tags: always
+
+    - name: "🚨 SAFETY ABORT: Existing Kubernetes detected"
+      fail:
+        msg: |
+          ==========================================
+          🚨 SAFETY ABORT: EXISTING INSTALLATION DETECTED
+          ==========================================
+          
+          Node: {{ inventory_hostname }}
+          Kubernetes: {{ existing_k8s_check.stdout }}
+          Container Runtime: {{ existing_runtime_check.stdout }}
+          Cluster Member: {{ 'YES' if kubelet_conf_check.stat.exists else 'NO' }}
+          
+          ⚠️ DANGER: Running bootstrap on existing cluster could cause:
+          - Service disruption
+          - Data loss
+          - Cluster corruption
+          
+          🔧 SAFE OPTIONS:
+          1. Run detection first: ansible-playbook playbooks/detect-existing-cluster.yml
+          2. Use force mode: --extra-vars "force_bootstrap=true" (DANGEROUS!)
+          3. Clean nodes manually before bootstrap
+          
+          📚 See SAFETY_PROCEDURES.md for guidance
+      when: 
+        - force_bootstrap | default(false) | bool == false
+        - >
+          existing_k8s_check.stdout.startswith('FOUND:') or
+          existing_runtime_check.stdout in ['CRIO_RUNNING', 'DOCKER_RUNNING'] or
+          kubelet_conf_check.stat.exists
+      tags: always
+
+    - name: "✅ SAFETY: Clean nodes detected - proceeding with bootstrap"
+      debug:
+        msg: "✅ Node {{ inventory_hostname }} appears clean - safe to bootstrap"
+      when: 
+        - existing_k8s_check.stdout == 'NOT_FOUND'
+        - existing_runtime_check.stdout == 'NONE_RUNNING'  
+        - not kubelet_conf_check.stat.exists
+      tags: always
+
+    - name: Emergency time synchronization (fix repository timestamp issues)
+      block:
+        - name: Enable systemd-timesyncd
+          systemd:
+            name: systemd-timesyncd
+            enabled: yes
+            state: started
+          ignore_errors: yes
+
+        - name: Force immediate time sync
+          shell: |
+            timedatectl set-ntp true
+            systemctl restart systemd-timesyncd
+            sleep 5
+          ignore_errors: yes
+          
+        - name: Verify time sync status
+          shell: timedatectl status
+          register: time_status
+          changed_when: false
+          ignore_errors: yes
+          
+      tags: always
+
+    - name: Verify required variables are defined
+      fail:
+        msg: "Required variable '{{ item }}' is not defined"
+      when: vars[item] is undefined
+      loop:
+        - api_endpoint_name
+        - kubernetes_version
+        - pod_subnet
+        - service_subnet
+      tags: always
+
+    - name: Verify network subnets are defined
+      fail:
+        msg: "Network subnet {{ item.name }} is not defined or empty"
+      when: item.value is undefined or item.value == ""
+      loop:
+        - { name: "pod_subnet", value: "{{ pod_subnet | default('') }}" }
+        - { name: "service_subnet", value: "{{ service_subnet | default('') }}" }
+      tags: always
+
+    - name: Check available disk space
+      shell: df / | awk 'NR==2 {print $4}'
+      register: available_space
+      changed_when: false
+      tags: always
+
+    - name: Verify sufficient disk space (minimum 10GB)
+      fail:
+        msg: "Insufficient disk space. Available: {{ (available_space.stdout | int / 1024 / 1024) | round(1) }}GB, Required: 10GB"
+      when: (available_space.stdout | int) < 10485760  # 10GB in KB
+      tags: always
+
+  roles:
+    - role: common
+      tags: ['common', 'system']
+    - role: containerd
+      tags: ['containerd', 'runtime']
+    - role: kubernetes
+      tags: ['kubernetes', 'k8s']
+    - role: network
+      tags: ['network', 'hosts']
+
+  post_tasks:
+    - name: Bootstrap verification summary
+      debug:
+        msg:
+          - "=== Kubernetes Bootstrap Completed ==="
+          - "Node: {{ inventory_hostname }}"
+          - "Role: {{ k8s_role | default('undefined') }}"
+          - "Ubuntu: {{ ansible_distribution }} {{ ansible_distribution_version }}"
+          - "Kubernetes: {{ kubeadm_version_output.stdout | default('check failed') }}"
+          - "containerd: Service {{ containerd_service_status.status.ActiveState | default('unknown') }}"
+          - "API Endpoint: {{ api_endpoint_name }} -> {{ master1_ip | default('not configured') }}"
+          - ""
+          - "Ready for cluster initialization phase!"
+      tags: always
+
+    - name: Next steps information
+      debug:
+        msg:
+          - "=== Next Steps ==="
+          - "1. Verify all nodes completed successfully"
+          - "2. Run cluster initialization on primary master"
+          - "3. Join additional masters (if HA setup)"
+          - "4. Join worker nodes to cluster"
+          - "5. Install CNI plugin (Calico/Flannel)"
+      run_once: true
+      tags: always

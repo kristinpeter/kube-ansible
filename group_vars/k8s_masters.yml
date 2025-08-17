@@ -1,0 +1,14 @@
+---
+# Variables specific to Kubernetes master nodes
+
+# Firewall ports for master nodes (if firewall is enabled)
+master_firewall_ports:
+  - "6443/tcp"      # Kubernetes API server
+  - "2379:2380/tcp" # etcd server client API
+  - "10250/tcp"     # Kubelet API
+  - "10259/tcp"     # kube-scheduler
+  - "10257/tcp"     # kube-controller-manager
+
+# Master node specific configurations
+k8s_master_bind_address: "0.0.0.0"
+k8s_api_secure_port: 6443

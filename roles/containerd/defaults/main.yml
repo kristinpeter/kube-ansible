@@ -1,0 +1,15 @@
+---
+# Default variables for containerd role
+
+# containerd service configuration
+containerd_service_name: containerd
+containerd_config_dir: /etc/containerd
+containerd_config_file: "{{ containerd_config_dir }}/config.toml"
+
+# Docker repository configuration (for containerd.io package)
+docker_gpg_key_path: /usr/share/keyrings/docker-archive-keyring.gpg
+docker_apt_sources_file: /etc/apt/sources.list.d/docker.list
+
+# containerd CRI configuration
+containerd_cri_socket: /run/containerd/containerd.sock
+containerd_systemd_cgroup: true

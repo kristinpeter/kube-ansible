@@ -1,0 +1,43 @@
+# NTP Configuration for Kubernetes Cluster Nodes
+# Managed by Ansible - Do not edit manually
+
+# Ubuntu NTP pool servers
+{% for server in ntp_servers %}
+server {{ server }} iburst
+{% endfor %}
+
+# Fallback to local hardware clock
+server 127.127.1.0
+fudge 127.127.1.0 stratum 10
+
+# Access control configuration
+# Deny all by default
+restrict default kod nomodify notrap nopeer noquery
+restrict -6 default kod nomodify notrap nopeer noquery
+
+# Allow localhost
+restrict 127.0.0.1
+restrict -6 ::1
+
+# Allow NTP clients on local subnet (optional)
+{% if allow_ntp_clients | default(false) %}
+restrict {{ ansible_default_ipv4.network }}/{{ ansible_default_ipv4.prefix }} nomodify notrap
+{% endif %}
+
+# Enable statistics
+statsdir /var/log/ntpstats/
+
+statistics loopstats peerstats clockstats
+filegen loopstats file loopstats type day enable
+filegen peerstats file peerstats type day enable
+filegen clockstats file clockstats type day enable
+
+# Drift file location
+driftfile /var/lib/ntp/drift
+
+# Leap seconds file
+leapfile /usr/share/zoneinfo/leap-seconds.list
+
+# Security settings
+disable auth
+tinker panic 0

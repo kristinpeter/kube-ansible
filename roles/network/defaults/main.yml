@@ -1,0 +1,9 @@
+---
+# Default variables for network role
+
+# API endpoint configuration
+api_endpoint_hosts_entry: true
+
+# Firewall configuration
+configure_ufw: "{{ configure_firewall | default(false) }}"
+ufw_default_policy: deny

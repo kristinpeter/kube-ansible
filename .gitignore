@@ -1,0 +1,70 @@
+# Ansible/Kubernetes specific
+ansible.cfg
+group_vars/all.yml
+inventory/*/hosts.yml
+kubeconfig/
+*.retry
+*.log
+
+# User credentials and environment-specific files
+inventory/production/hosts.yml
+inventory/staging/hosts.yml
+inventory/production/group_vars/
+inventory/staging/group_vars/
+host_vars/*
+
+# SSH keys and certificates
+*.pem
+*.key
+*.crt
+*.csr
+id_rsa*
+*.pub
+
+# Runtime files
+.ansible/
+*.facts
+*.cache
+ansible_facts_cache/
+
+# Generated files
+join_commands.txt
+cluster_tokens.txt
+certificates/
+
+# Development and testing
+test_output/
+debug/
+.vscode/
+.idea/
+
+# OS specific
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+*.bak
+*.orig
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.env
+venv/
+env/
+
+# Documentation build files
+_build/
+.tox/
+
+# Local development overrides
+local_*
+my_*
+*_local*

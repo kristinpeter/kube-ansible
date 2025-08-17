@@ -1,0 +1,33 @@
+---
+# Example Production Inventory
+# Copy this file to hosts.yml and update with your actual hostnames/IPs
+
+all:
+  children:
+    k8s_cluster:
+      children:
+        k8s_masters:
+          hosts:
+            kube-master1.your-domain.lan:
+              ansible_host: kube-master1.your-domain.lan  # or IP: 192.168.1.10
+              k8s_role: master
+              k8s_master_primary: true
+            kube-master2.your-domain.lan:
+              ansible_host: kube-master2.your-domain.lan  # or IP: 192.168.1.11
+              k8s_role: master
+              k8s_master_primary: false
+            kube-master3.your-domain.lan:
+              ansible_host: kube-master3.your-domain.lan  # or IP: 192.168.1.12
+              k8s_role: master
+              k8s_master_primary: false
+        k8s_workers:
+          hosts:
+            kube-worker1.your-domain.lan:
+              ansible_host: kube-worker1.your-domain.lan  # or IP: 192.168.1.20
+              k8s_role: worker
+            kube-worker2.your-domain.lan:
+              ansible_host: kube-worker2.your-domain.lan  # or IP: 192.168.1.21
+              k8s_role: worker
+            kube-worker3.your-domain.lan:
+              ansible_host: kube-worker3.your-domain.lan  # or IP: 192.168.1.22
+              k8s_role: worker

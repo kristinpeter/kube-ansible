@@ -1,0 +1,138 @@
+---
+# Common role tasks for all Kubernetes nodes
+
+- name: Update apt cache
+  apt:
+    update_cache: yes
+    cache_valid_time: 3600
+  tags:
+    - common
+    - system-update
+
+- name: Upgrade all packages
+  apt:
+    upgrade: dist
+  when: upgrade_packages | default(true)
+  tags:
+    - common
+    - system-update
+
+- name: Install common required packages
+  apt:
+    name: "{{ common_packages }}"
+    state: present
+    update_cache: yes
+  tags:
+    - common
+    - packages
+
+- name: Configure NTP time synchronization
+  block:
+    - name: Install NTP client
+      apt:
+        name: 
+          - ntp
+          - ntpdate
+        state: present
+        update_cache: yes
+      
+    - name: Configure NTP servers
+      template:
+        src: ntp.conf.j2
+        dest: /etc/ntp.conf
+        backup: yes
+        mode: '0644'
+      notify: restart ntp
+      
+    - name: Start and enable NTP service
+      systemd:
+        name: ntp
+        state: started
+        enabled: yes
+        
+    - name: Force time synchronization
+      command: ntpdate -s {{ ntp_servers[0] }}
+      changed_when: false
+      ignore_errors: yes
+      
+  when: configure_ntp | default(true)
+  tags:
+    - common
+    - ntp
+    - time-sync
+
+- name: Load kernel modules for Kubernetes
+  modprobe:
+    name: "{{ item }}"
+    state: present
+  loop: "{{ kernel_modules }}"
+  tags:
+    - common
+    - kernel-modules
+
+- name: Add kernel modules to load at boot
+  lineinfile:
+    path: /etc/modules-load.d/k8s.conf
+    line: "{{ item }}"
+    create: yes
+    mode: '0644'
+  loop: "{{ kernel_modules }}"
+  tags:
+    - common
+    - kernel-modules
+
+- name: Configure sysctl parameters for Kubernetes
+  sysctl:
+    name: "{{ item.key }}"
+    value: "{{ item.value }}"
+    state: present
+    sysctl_file: /etc/sysctl.d/k8s.conf
+    reload: yes
+  loop: "{{ sysctl_config | dict2items }}"
+  tags:
+    - common
+    - sysctl
+
+- name: Check if swap is enabled
+  command: swapon --show=NAME --noheadings
+  register: swap_status
+  changed_when: false
+  failed_when: false
+  tags:
+    - common
+    - swap
+
+- name: Disable swap
+  command: swapoff -a
+  when: 
+    - disable_swap | default(true)
+    - swap_status.stdout | length > 0
+  tags:
+    - common
+    - swap
+
+- name: Remove swap entries from fstab
+  lineinfile:
+    path: /etc/fstab
+    regexp: '^[^#].*\sswap\s'
+    state: absent
+  when: disable_swap | default(true)
+  tags:
+    - common
+    - swap
+
+- name: Check if reboot is required
+  stat:
+    path: /var/run/reboot-required
+  register: reboot_required_file
+  tags:
+    - common
+    - reboot
+
+- name: Notify if reboot is required
+  debug:
+    msg: "Reboot required after system updates"
+  when: reboot_required_file.stat.exists
+  tags:
+    - common
+    - reboot

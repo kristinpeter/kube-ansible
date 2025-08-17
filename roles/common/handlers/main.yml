@@ -1,0 +1,9 @@
+---
+# Common role handlers
+
+- name: restart ntp
+  systemd:
+    name: ntp
+    state: restarted
+    daemon_reload: yes
+  listen: restart ntp

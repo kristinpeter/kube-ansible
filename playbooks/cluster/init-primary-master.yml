@@ -1,0 +1,170 @@
+---
+# Initialize Kubernetes Cluster on Primary Master
+# This playbook initializes the first master node and generates join tokens
+
+- name: "*** Initialize Primary Master ***"
+  hosts: "{{ groups['k8s_masters'][0] }}"
+  become: yes
+  gather_facts: yes
+  vars_files:
+    - "{{ playbook_dir }}/../../group_vars/all.yml"
+  
+  pre_tasks:
+    - name: "Check: Verify this is the designated primary master"
+      debug:
+        msg: 
+          - "Primary Master: {{ inventory_hostname }}"
+          - "All Masters: {{ groups['k8s_masters'] }}"
+      
+    - name: "Safety: Check if cluster already exists"
+      stat:
+        path: /etc/kubernetes/admin.conf
+      register: existing_cluster_check
+    
+    - name: "Safety: Check if API server is running"
+      shell: kubectl --kubeconfig=/etc/kubernetes/admin.conf cluster-info --request-timeout=5s
+      register: cluster_running_check
+      failed_when: false
+      changed_when: false
+      when: existing_cluster_check.stat.exists
+      
+    - name: "ABORT: Cluster already initialized"
+      fail:
+        msg: |
+          ==========================================
+          ERROR: CLUSTER ALREADY EXISTS AND RUNNING
+          ==========================================
+          
+          Found existing cluster configuration at /etc/kubernetes/admin.conf
+          API server is responding: {{ cluster_running_check.rc == 0 }}
+          
+          This appears to be an already initialized and running cluster.
+          
+          WARNING:  Do not re-initialize an existing cluster!
+          
+          Notice: If you need to re-initialize:
+          1. Clean the cluster first using reset procedures
+          2. Or use force mode (DANGEROUS): --extra-vars "force_cluster_init=true"
+      when: 
+        - existing_cluster_check.stat.exists
+        - cluster_running_check.rc == 0
+        - not (force_cluster_init | default(false) | bool)
+        
+    - name: "WARNING: FORCE MODE - Existing cluster detected but continuing"
+      debug:
+        msg: "WARNING: force_cluster_init=true - Re-initializing existing cluster!"
+      when: 
+        - existing_cluster_check.stat.exists
+        - cluster_running_check.rc == 0
+        - force_cluster_init | default(false) | bool
+        
+    - name: "Notice: Stale config detected - API server not responding, safe to re-initialize"
+      debug:
+        msg: "Found stale kubeconfig but API server not responding - safe to initialize"
+      when: 
+        - existing_cluster_check.stat.exists
+        - cluster_running_check.rc != 0
+
+  tasks:
+    - name: "Initialize Kubernetes cluster"
+      shell: >
+        kubeadm init
+        --control-plane-endpoint="{{ api_endpoint_name }}:6443"
+        --pod-network-cidr="{{ pod_subnet }}"
+        --service-cidr="{{ service_subnet }}"
+        --upload-certs
+      register: kubeadm_init_result
+      timeout: 600
+      retries: 3
+      until: kubeadm_init_result is succeeded
+      
+    - name: "Display kubeadm init output"
+      debug:
+        var: kubeadm_init_result.stdout_lines
+        
+    - name: "Extract master join command"
+      shell: |
+        kubeadm --kubeconfig=/etc/kubernetes/admin.conf token create --print-join-command --certificate-key \
+        $(kubeadm --kubeconfig=/etc/kubernetes/admin.conf init phase upload-certs --upload-certs 2>/dev/null | tail -1)
+      register: master_join_command_output
+      become: yes
+      when: groups['k8s_masters'] | length > 1
+      
+    - name: "Extract worker join command" 
+      shell: kubeadm --kubeconfig=/etc/kubernetes/admin.conf token create --print-join-command
+      register: worker_join_command_output
+      become: yes
+      when: groups['k8s_workers'] | length > 0
+      
+    - name: "Store join commands for other playbooks"
+      set_fact:
+        master_join_command: "{{ master_join_command_output.stdout | default('') }}"
+        worker_join_command: "{{ worker_join_command_output.stdout | default('') }}"
+        cluster_initialized: true
+        
+    - name: "Save master join command to file"
+      copy:
+        content: "{{ master_join_command_output.stdout | default('') }}"
+        dest: /tmp/master_join_command
+        mode: '0600'
+      become: yes
+      when: groups['k8s_masters'] | length > 1 and master_join_command_output.stdout is defined
+      
+    - name: "Save worker join command to file"
+      copy:
+        content: "{{ worker_join_command_output.stdout | default('') }}"
+        dest: /tmp/worker_join_command
+        mode: '0600'
+      become: yes
+      when: groups['k8s_workers'] | length > 0 and worker_join_command_output.stdout is defined
+        
+    - name: "Share join commands with other hosts"
+      set_fact:
+        master_join_command: "{{ hostvars[groups['k8s_masters'][0]]['master_join_command'] | default('') }}"
+        worker_join_command: "{{ hostvars[groups['k8s_masters'][0]]['worker_join_command'] | default('') }}"
+        cluster_initialized: "{{ hostvars[groups['k8s_masters'][0]]['cluster_initialized'] | default(false) }}"
+      delegate_to: "{{ item }}"
+      delegate_facts: true
+      loop: "{{ groups['k8s_cluster'] }}"
+      run_once: true
+      
+    - name: "Create kubectl config directory for ansible user"
+      file:
+        path: "{{ ansible_env.HOME }}/.kube"
+        state: directory
+        owner: "{{ ansible_user | default(ansible_ssh_user) }}"
+        group: "{{ ansible_user | default(ansible_ssh_user) }}"
+        mode: '0755'
+      become: yes
+      
+    - name: "Copy kubectl admin config"
+      copy:
+        src: /etc/kubernetes/admin.conf
+        dest: "{{ ansible_env.HOME }}/.kube/config"
+        owner: "{{ ansible_user | default(ansible_ssh_user) }}"
+        group: "{{ ansible_user | default(ansible_ssh_user) }}"
+        mode: '0600'
+        remote_src: yes
+      become: yes
+      
+    - name: "Verify kubectl access"
+      shell: kubectl --kubeconfig=/etc/kubernetes/admin.conf get nodes
+      register: kubectl_test
+      become: yes
+      retries: 5
+      delay: 10
+      until: kubectl_test is succeeded
+      
+    - name: "Primary master initialization summary"
+      debug:
+        msg:
+          - "=== PRIMARY MASTER INITIALIZED ==="
+          - "Node: {{ inventory_hostname }}"
+          - "API Endpoint: {{ api_endpoint_name }}:6443"  
+          - "Pod Network: {{ pod_subnet }}"
+          - "Service Network: {{ service_subnet }}"
+          - ""
+          - "Current cluster status:"
+          - "{{ kubectl_test.stdout_lines }}"
+          - ""
+          - "[OK] Ready for additional masters and workers to join"

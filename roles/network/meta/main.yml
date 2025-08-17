@@ -1,0 +1,18 @@
+---
+galaxy_info:
+  author: Ansible Automation
+  description: Network configuration for Kubernetes cluster
+  company: Homelab
+  license: MIT
+  min_ansible_version: 2.9
+  platforms:
+    - name: Ubuntu
+      versions:
+        - "24.04"
+  galaxy_tags:
+    - network
+    - kubernetes
+    - firewall
+    - hosts
+
+dependencies: []

@@ -1,0 +1,195 @@
+---
+# Existing Cluster Detection Playbook
+# Purpose: Detect existing Kubernetes installations and container runtimes
+# Usage: ansible-playbook -i inventory/production/hosts.yml playbooks/detect-existing-cluster.yml
+
+- name: Detect Existing Kubernetes and Container Runtime
+  hosts: k8s_cluster
+  gather_facts: yes
+  become: no
+  
+  vars:
+    detection_results: []
+    
+  tasks:
+    - name: "Check: Detection Phase: Check for existing installations"
+      debug:
+        msg: "Scanning {{ inventory_hostname }} for existing Kubernetes/container runtime..."
+
+    # Kubernetes Detection
+    - name: "Check: Existing Kubernetes installation"
+      shell: |
+        if command -v kubeadm >/dev/null 2>&1 && kubeadm version -o short >/dev/null 2>&1; then
+          echo "FOUND: $(kubeadm version -o short 2>/dev/null)"
+        else
+          echo "NOT_FOUND"
+        fi
+      register: existing_k8s
+      changed_when: false
+      failed_when: false
+
+    - name: "Check: Kubernetes cluster status"
+      shell: |
+        if [ -f /etc/kubernetes/admin.conf ]; then
+          echo "CLUSTER_CONFIGURED"
+        elif [ -f /etc/kubernetes/kubelet.conf ]; then
+          echo "NODE_JOINED"
+        else
+          echo "NOT_CONFIGURED"
+        fi
+      register: k8s_cluster_status
+      changed_when: false
+      failed_when: false
+
+    - name: "Check: Running kubelet service"
+      systemd:
+        name: kubelet
+      register: kubelet_status
+      become: yes
+      failed_when: false
+
+    # Container Runtime Detection
+    - name: "Check: containerd installation"
+      shell: |
+        if systemctl is-active --quiet containerd; then
+          echo "RUNNING: $(ctr version 2>/dev/null | grep 'Server:' -A1 | grep 'Version:' | awk '{print $2}' || echo 'unknown')"
+        elif command -v containerd &> /dev/null; then
+          echo "INSTALLED_NOT_RUNNING"
+        else
+          echo "NOT_FOUND"
+        fi
+      register: existing_containerd
+      changed_when: false
+      failed_when: false
+
+    - name: "Check: cri-o installation"
+      shell: |
+        if systemctl is-active --quiet crio; then
+          echo "RUNNING: $(crio version 2>/dev/null | grep 'cri-o version' | awk '{print $3}' || echo 'unknown')"
+        elif command -v crio &> /dev/null; then
+          echo "INSTALLED_NOT_RUNNING"
+        else
+          echo "NOT_FOUND"
+        fi
+      register: existing_crio
+      changed_when: false
+      failed_when: false
+
+    - name: "Check: Docker installation"
+      shell: |
+        if systemctl is-active --quiet docker; then
+          echo "RUNNING: $(docker version --format '{{ "{{" }}.Server.Version{{ "}}" }}' 2>/dev/null || echo 'unknown')"
+        elif command -v docker &> /dev/null; then
+          echo "INSTALLED_NOT_RUNNING"
+        else
+          echo "NOT_FOUND"
+        fi
+      register: existing_docker
+      changed_when: false
+      failed_when: false
+
+    # Package Manager Detection
+    - name: "Check: Kubernetes packages held"
+      shell: apt-mark showhold | grep -E '(kubeadm|kubelet|kubectl)' | wc -l
+      register: k8s_packages_held
+      changed_when: false
+      failed_when: false
+
+    # Critical System State
+    - name: "Check: etcd data directory"
+      stat:
+        path: /var/lib/etcd
+      register: etcd_data
+      become: yes
+
+    - name: "Check: Kubernetes manifest directory"
+      shell: ls -la /etc/kubernetes/manifests/ 2>/dev/null | wc -l || echo "0"
+      register: k8s_manifests
+      changed_when: false
+      failed_when: false
+
+    # Analysis and Warnings
+    - name: "ERROR: SAFETY ANALYSIS"
+      debug:
+        msg: |
+          ==========================================
+          Check: EXISTING INSTALLATION DETECTED ON {{ inventory_hostname }}
+          ==========================================
+          
+          Display: KUBERNETES STATUS:
+          - Installation: {{ existing_k8s.stdout }}
+          - Cluster Status: {{ k8s_cluster_status.stdout }}
+          - kubelet Status: {{ kubelet_status.status.ActiveState | default('not-found') }}
+          - Packages Held: {{ k8s_packages_held.stdout }} packages
+          - etcd Data: {{ 'EXISTS' if etcd_data.stat.exists else 'NOT_FOUND' }}
+          - K8s Manifests: {{ k8s_manifests.stdout }} files
+          
+          Container Runtime: CONTAINER RUNTIME STATUS:
+          - containerd: {{ existing_containerd.stdout }}
+          - cri-o: {{ existing_crio.stdout }}
+          - docker: {{ existing_docker.stdout }}
+          
+          WARNING: RISK ASSESSMENT:
+          {% if 'FOUND' in existing_k8s.stdout and existing_k8s.stdout != 'NOT_FOUND' %}
+          HIGH RISK: HIGH RISK: Existing Kubernetes installation detected!
+          {% endif %}
+          {% if existing_crio.stdout.startswith('RUNNING:') %}
+          HIGH RISK: HIGH RISK: cri-o is running - our automation installs containerd!
+          {% endif %}
+          {% if k8s_cluster_status.stdout != 'NOT_CONFIGURED' %}
+          HIGH RISK: CRITICAL: Node appears to be part of existing cluster!
+          {% endif %}
+          {% if kubelet_status.status.ActiveState | default('') == 'active' %}
+          HIGH RISK: CRITICAL: kubelet is running - cluster is active!
+          {% endif %}
+      when: >
+        existing_k8s.stdout.startswith('FOUND:') or
+        existing_crio.stdout.startswith('RUNNING:') or
+        k8s_cluster_status.stdout != 'NOT_CONFIGURED' or
+        (kubelet_status.status.ActiveState | default('')) == 'active'
+
+    - name: "Verify: SAFETY CHECK PASSED"
+      debug:
+        msg: |
+          ==========================================
+          Verify: CLEAN NODE DETECTED ON {{ inventory_hostname }}
+          ==========================================
+          
+          Display: VERIFICATION:
+          - No existing Kubernetes installation
+          - No active container runtime conflicts
+          - Node not part of existing cluster
+          - Safe to proceed with bootstrap
+      when: >
+        existing_k8s.stdout == 'NOT_FOUND' and
+        not existing_crio.stdout.startswith('RUNNING:') and
+        k8s_cluster_status.stdout == 'NOT_CONFIGURED' and
+        (kubelet_status.status.ActiveState | default('')) != 'active'
+
+# Summary Report
+- name: Safety Detection Summary
+  hosts: localhost
+  gather_facts: no
+  
+  tasks:
+    - name: "Summary: CLUSTER SAFETY SUMMARY"
+      debug:
+        msg: |
+          
+          Safety: SAFETY DETECTION COMPLETE
+          =============================
+          
+          Display: Scanned {{ groups['k8s_cluster'] | length }} nodes for existing installations
+          
+          WARNING: IMPORTANT: Review the individual node reports above
+          
+          ERROR: IF ANY RED WARNINGS APPEARED:
+          - DO NOT run the bootstrap playbook
+          - Existing installations could be damaged
+          - Manual intervention required
+          
+          Verify: IF ALL NODES SHOW "CLEAN NODE DETECTED":
+          - Safe to proceed with bootstrap
+          - Run: ansible-playbook -i inventory/production/hosts.yml bootstrap.yml
+          
+          Resources: For conflict resolution, see SAFETY_PROCEDURES.md

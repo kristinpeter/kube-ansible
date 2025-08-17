@@ -1,0 +1,115 @@
+---
+# Network configuration tasks
+
+- name: Gather facts from primary master node
+  setup:
+  delegate_to: "{{ groups['k8s_masters'][0] }}"
+  delegate_facts: yes
+  when: 
+    - groups['k8s_masters'] is defined 
+    - groups['k8s_masters'] | length > 0
+    - inventory_hostname != groups['k8s_masters'][0]
+  tags:
+    - network
+    - hosts
+
+- name: Get primary master node IP address
+  set_fact:
+    master1_ip: "{{ hostvars[groups['k8s_masters'][0]]['ansible_default_ipv4']['address'] }}"
+  when: groups['k8s_masters'] is defined and groups['k8s_masters'] | length > 0
+  tags:
+    - network
+    - hosts
+
+- name: Add API endpoint to /etc/hosts
+  lineinfile:
+    path: /etc/hosts
+    regexp: '.*{{ api_endpoint_name }}.*'
+    line: "{{ master1_ip }} {{ api_endpoint_name }}"
+    backup: yes
+  when: 
+    - api_endpoint_hosts_entry | default(true)
+    - master1_ip is defined
+  tags:
+    - network
+    - hosts
+
+- name: Configure UFW firewall for master nodes
+  block:
+    - name: Set UFW default policy
+      ufw:
+        policy: "{{ ufw_default_policy }}"
+        direction: incoming
+
+    - name: Allow SSH
+      ufw:
+        rule: allow
+        port: '22'
+        proto: tcp
+
+    - name: Allow master node firewall ports
+      ufw:
+        rule: allow
+        port: "{{ item.split('/')[0] }}"
+        proto: "{{ item.split('/')[1] }}"
+      loop: "{{ master_firewall_ports }}"
+
+    - name: Enable UFW
+      ufw:
+        state: enabled
+  when: 
+    - configure_ufw | default(false)
+    - inventory_hostname in groups['k8s_masters']
+  tags:
+    - network
+    - firewall
+
+- name: Configure UFW firewall for worker nodes
+  block:
+    - name: Set UFW default policy
+      ufw:
+        policy: "{{ ufw_default_policy }}"
+        direction: incoming
+
+    - name: Allow SSH
+      ufw:
+        rule: allow
+        port: '22'
+        proto: tcp
+
+    - name: Allow worker node firewall ports
+      ufw:
+        rule: allow
+        port: "{{ item.split('/')[0] }}"
+        proto: "{{ item.split('/')[1] }}"
+      loop: "{{ worker_firewall_ports }}"
+
+    - name: Enable UFW
+      ufw:
+        state: enabled
+  when: 
+    - configure_ufw | default(false)
+    - inventory_hostname in groups['k8s_workers']
+  tags:
+    - network
+    - firewall
+
+- name: Verify /etc/hosts entry
+  lineinfile:
+    path: /etc/hosts
+    regexp: '.*{{ api_endpoint_name }}.*'
+    state: absent
+  check_mode: yes
+  register: hosts_check
+  changed_when: false
+  tags:
+    - network
+    - verification
+
+- name: Display API endpoint configuration
+  debug:
+    msg: "API endpoint {{ api_endpoint_name }} configured with IP {{ master1_ip }}"
+  when: master1_ip is defined
+  tags:
+    - network
+    - verification

@@ -1,0 +1,13 @@
+---
+# Default variables for kubernetes role
+
+# Kubernetes repository configuration
+kubernetes_gpg_key_path: /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+kubernetes_apt_sources_file: /etc/apt/sources.list.d/kubernetes.list
+
+# Package hold configuration
+kubernetes_package_hold: true
+
+# Kubelet service configuration
+kubelet_service_name: kubelet
+kubelet_enable_service: true

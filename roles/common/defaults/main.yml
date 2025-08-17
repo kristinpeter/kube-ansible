@@ -1,0 +1,13 @@
+---
+# Default variables for common role
+
+# System update configuration
+update_cache: true
+upgrade_packages: true
+
+# Package installation timeout
+package_install_timeout: 300
+
+# Reboot configuration
+reboot_required_check: true
+reboot_timeout: 600

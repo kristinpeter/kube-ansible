@@ -1,0 +1,162 @@
+---
+# Install CNI (Container Network Interface) Plugin
+# This playbook installs Calico CNI using the official Tigera operator
+
+- name: "*** Install Calico CNI Plugin"
+  hosts: "{{ groups['k8s_masters'][0] }}"
+  become: yes
+  gather_facts: yes
+  vars_files:
+    - "{{ playbook_dir }}/../../group_vars/all.yml"
+  
+  vars:
+    # Calico configuration (can be overridden via extra-vars)
+    calico_version: "v3.30.2"
+    calico_operator_crds_url: "https://raw.githubusercontent.com/projectcalico/calico/{{ calico_version }}/manifests/operator-crds.yaml"
+    calico_operator_url: "https://raw.githubusercontent.com/projectcalico/calico/{{ calico_version }}/manifests/tigera-operator.yaml"
+    calico_custom_resources_url: "https://raw.githubusercontent.com/projectcalico/calico/{{ calico_version }}/manifests/custom-resources.yaml"
+    calico_encapsulation: "VXLANCrossSubnet"  # Options: "VXLAN", "IPIP", "VXLANCrossSubnet", "IPIPCrossSubnet", "None"
+    calico_nat_outgoing: "Enabled"
+    calico_block_size: 26
+  
+  pre_tasks:
+    - name: "Check: CNI Installation Information"
+      debug:
+        msg:
+          - "=== CALICO CNI INSTALLATION ==="
+          - "Method: Official Tigera Operator"
+          - "Version: {{ calico_version }}"
+          - "Pod Network: {{ pod_subnet }}"
+          - "Encapsulation: {{ calico_encapsulation }}"
+
+  tasks:
+    # =============================================================================
+    # CALICO OPERATOR INSTALLATION (Following Official Documentation)
+    # =============================================================================
+    
+    - name: "Download: Step 1: Install Tigera Operator CRDs"
+      shell: kubectl --kubeconfig=/etc/kubernetes/admin.conf create -f {{ calico_operator_crds_url }}
+      register: operator_crds_install
+      retries: 3
+      delay: 10
+      until: operator_crds_install is succeeded
+      failed_when: 
+        - operator_crds_install.rc != 0
+        - '"already exists" not in operator_crds_install.stderr'
+      
+    - name: "Download: Step 2: Install Tigera Operator"
+      shell: kubectl --kubeconfig=/etc/kubernetes/admin.conf create -f {{ calico_operator_url }}
+      register: operator_install
+      retries: 3
+      delay: 10
+      until: operator_install is succeeded
+      failed_when: 
+        - operator_install.rc != 0
+        - '"already exists" not in operator_install.stderr'
+      
+    - name: "Wait: Wait for Tigera Operator to be available"
+      shell: kubectl --kubeconfig=/etc/kubernetes/admin.conf wait --for=condition=available --timeout=300s deployment/tigera-operator -n tigera-operator
+      register: operator_ready
+      retries: 3
+      delay: 30
+      until: operator_ready is succeeded
+      
+    - name: "Download: Step 3: Download official custom resources"
+      get_url:
+        url: "{{ calico_custom_resources_url }}"
+        dest: /tmp/calico-custom-resources.yaml
+        mode: '0644'
+      register: download_custom_resources
+      retries: 3
+      delay: 10
+      until: download_custom_resources is succeeded
+      
+    - name: "Notice: Step 4: Customize pod CIDR in custom resources"
+      replace:
+        path: /tmp/calico-custom-resources.yaml
+        regexp: 'cidr: 192\.168\.0\.0/16'
+        replace: 'cidr: {{ pod_subnet }}'
+      when: pod_subnet != "192.168.0.0/16"
+      
+    - name: "Notice: Customize encapsulation method"
+      replace:
+        path: /tmp/calico-custom-resources.yaml
+        regexp: 'encapsulation: VXLANCrossSubnet'
+        replace: 'encapsulation: {{ calico_encapsulation }}'
+      when: calico_encapsulation != "VXLANCrossSubnet"
+      
+    - name: "Notice: Customize block size"
+      replace:
+        path: /tmp/calico-custom-resources.yaml
+        regexp: 'blockSize: 26'
+        replace: 'blockSize: {{ calico_block_size }}'
+      when: calico_block_size != 26
+      
+    - name: "Download: Step 5: Apply customized Calico installation"
+      shell: kubectl --kubeconfig=/etc/kubernetes/admin.conf create -f /tmp/calico-custom-resources.yaml
+      register: calico_installation
+      retries: 3
+      delay: 10
+      until: calico_installation is succeeded
+      failed_when: 
+        - calico_installation.rc != 0
+        - '"already exists" not in calico_installation.stderr'
+      
+    - name: "🧹 Clean up temporary file"
+      file:
+        path: /tmp/calico-custom-resources.yaml
+        state: absent
+      
+    - name: "Wait: Monitor Calico installation status"
+      shell: kubectl --kubeconfig=/etc/kubernetes/admin.conf get tigerastatus/calico --no-headers -o custom-columns=":status.conditions[?(@.type=='Available')].status"
+      register: calico_status_check
+      retries: 20
+      delay: 15
+      until: calico_status_check.stdout == "True"
+      
+    - name: "Verify: Verify all Calico components"
+      shell: kubectl --kubeconfig=/etc/kubernetes/admin.conf get tigerastatus
+      register: tigera_status
+      
+    - name: "Verify: Verify Calico system pods"
+      shell: kubectl --kubeconfig=/etc/kubernetes/admin.conf get pods -n calico-system
+      register: calico_pods_status
+      
+    - name: "Summary: Calico installation summary"
+      debug:
+        msg:
+          - "=== CALICO INSTALLED SUCCESSFULLY ==="
+          - "Method: Official Tigera Operator"
+          - "Version: {{ calico_version }}"
+          - "Pod Network: {{ pod_subnet }}"
+          - "Encapsulation: {{ calico_encapsulation }}"
+          - ""
+          - "Tigera Status:"
+          - "{{ tigera_status.stdout_lines }}"
+          - ""
+          - "Calico System Pods:"
+          - "{{ calico_pods_status.stdout_lines }}"
+
+  post_tasks:
+    - name: "Wait: Wait for all nodes to become Ready"
+      shell: kubectl --kubeconfig=/etc/kubernetes/admin.conf get nodes --no-headers | grep -v ' Ready ' | wc -l
+      register: not_ready_nodes
+      retries: 15
+      delay: 20
+      until: not_ready_nodes.stdout | int == 0
+      
+    - name: "Verify: Verify cluster network readiness"
+      shell: kubectl --kubeconfig=/etc/kubernetes/admin.conf get nodes -o wide
+      register: final_nodes_status
+      
+    - name: "🎉 CNI Installation Complete"
+      debug:
+        msg:
+          - "=== CNI INSTALLATION COMPLETED ==="
+          - "Plugin: Calico"
+          - "All nodes should now be in Ready state"
+          - ""
+          - "Current cluster status:"
+          - "{{ final_nodes_status.stdout_lines }}"
+          - ""
+          - "Verify: Cluster networking is ready for workloads!"

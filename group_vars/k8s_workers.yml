@@ -1,0 +1,10 @@
+---
+# Variables specific to Kubernetes worker nodes
+
+# Firewall ports for worker nodes (if firewall is enabled)
+worker_firewall_ports:
+  - "10250/tcp"         # Kubelet API
+  - "30000:32767/tcp"   # NodePort Services
+
+# Worker node specific configurations
+k8s_worker_max_pods: 110
