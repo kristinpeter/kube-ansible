@@ -362,6 +362,161 @@ When starting a new Claude Code session:
 - Document decisions and rationale for future reference
 - Keep user experience and production safety as top priorities
 
+## Recommended AI Prompts and Workflows
+
+### Starting New Sessions
+**Effective prompts to quickly establish context:**
+
+```
+"Continue working on the kube-ansible project - please read CLAUDE.md first"
+
+"I need help with the Kubernetes automation project at github.com/kristinpeter/kube-ansible"
+
+"Help me develop the kube-ansible project following the established patterns in CLAUDE.md"
+```
+
+### Development Task Prompts
+**For adding new features:**
+
+```
+"Add [feature] to the kube-ansible project following our established Ansible patterns"
+
+"Create a new role for [component] following the project standards in CLAUDE.md"
+
+"Improve the [playbook] while maintaining idempotency and safety checks"
+```
+
+### Testing and Quality Prompts
+
+```
+"Review this playbook for idempotency and safety following our project standards"
+
+"Help me test the [feature] in staging environment using our established workflow"
+
+"Check this code against the Ansible best practices documented in CLAUDE.md"
+```
+
+### Documentation Prompts
+
+```
+"Update the documentation for [feature] following our documentation standards"
+
+"Review and improve the user guide while maintaining our style and structure"
+
+"Ensure this change is properly documented across all relevant guides"
+```
+
+### Safety and Security Prompts
+
+```
+"Review this change for security implications and credential handling"
+
+"Verify this playbook follows our safety-first principles and error handling"
+
+"Check that this change doesn't break our idempotency guarantees"
+```
+
+### Git and Collaboration Prompts
+
+```
+"Help me create a proper feature branch and commit message for [change]"
+
+"Prepare this change for GitHub following our branching strategy"
+
+"Create a pull request description following our project standards"
+```
+
+## Claude Code Behavior Guidelines
+
+### Response Style Expectations
+- **Concise and Direct**: Follow the project's "simple, readable, reasonable" philosophy
+- **Safety-First**: Always consider production implications
+- **Professional**: Maintain high code quality and documentation standards
+- **Consistent**: Follow established patterns and naming conventions
+
+### Code Quality Expectations
+- **Idempotent**: All Ansible tasks must be safely repeatable
+- **Well-Documented**: Code should be self-explanatory with proper task names
+- **Error-Handled**: Include proper error handling and user-friendly messages
+- **Tested**: Consider staging testing and verification steps
+
+### Decision-Making Preferences
+- **Conservative**: Prefer proven approaches over experimental ones
+- **User-Focused**: Prioritize user experience and clear documentation
+- **Production-Ready**: All code should be suitable for production use
+- **Maintainable**: Write code that's easy to understand and modify
+
+## Context-Aware Automation
+
+### Automatic Context Loading
+When Claude Code sees these patterns, automatically apply project context:
+
+**File Patterns:**
+- `*.yml` in `playbooks/` → Apply Ansible best practices
+- `*.yml` in `roles/` → Follow role structure standards  
+- `*.md` files → Use documentation style guide
+- `inventory/*.yml` → Consider security and example patterns
+
+**Command Patterns:**
+- `ansible-playbook` commands → Suggest safety checks first
+- `git` commands → Apply branching strategy
+- Testing commands → Recommend staging environment
+
+### Smart Suggestions
+**When user mentions:**
+- "playbook" → Suggest idempotency checks and safety verification
+- "role" → Recommend following role structure standards
+- "deploy" → Suggest staging testing first
+- "commit" → Recommend proper commit message format with co-authorship
+- "documentation" → Apply documentation standards and cross-references
+
+## Advanced Workflow Patterns
+
+### Multi-Session Development
+**For complex features spanning multiple sessions:**
+
+1. **Session 1**: Plan and document the feature approach
+2. **Update CLAUDE.md**: Add feature-specific notes and decisions
+3. **Subsequent Sessions**: Reference the planning notes for consistency
+
+### Emergency Response Patterns
+**For production issues:**
+
+```
+"URGENT: Production issue with [component] - help troubleshoot following safety procedures"
+
+"Emergency fix needed for [issue] - maintain our safety-first approach"
+```
+
+### Collaboration Patterns
+**When working with team members:**
+
+```
+"Review this contribution from [person] for consistency with our standards"
+
+"Help integrate [external code] following our project patterns"
+```
+
+## Quality Assurance Checkpoints
+
+### Before Any Code Change
+- [ ] Read current CLAUDE.md for latest context
+- [ ] Understand the specific change requested
+- [ ] Consider safety and idempotency implications
+- [ ] Plan testing approach (staging first)
+
+### Before Code Commit
+- [ ] Verify idempotency of all changes
+- [ ] Check error handling and user messages
+- [ ] Ensure documentation is updated
+- [ ] Prepare proper commit message with co-authorship
+
+### Before Production Deployment
+- [ ] Confirm staging testing completed
+- [ ] Verify all safety checks are in place
+- [ ] Ensure rollback procedures are clear
+- [ ] Document any operational changes needed
+
 ---
 
 **Last Updated**: August 2025  
